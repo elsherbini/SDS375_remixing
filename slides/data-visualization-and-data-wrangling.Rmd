@@ -1,0 +1,2495 @@
+---
+title: "Data Visualization and Data Wrangling in R"
+author: "Claus O. Wilke, remixed by Joseph Elsherbini"
+date: "24-08-2022"
+output:
+  xaringan::moon_reader:
+    css: [default, "Wilke-slides-theme.css"]
+    lib_dir: libs
+    nature:
+      ratio: '16:9'
+      highlightStyle: github
+      highlightLines: true
+      slideNumberFormat: ''
+      titleSlideClass: [center, middle]
+---
+
+```{r setup, include=FALSE, echo=FALSE}
+options(htmltools.dir.version = FALSE)
+knitr::opts_chunk$set(comment = "")
+
+library(tidyverse)
+library(lubridate)
+library(cowplot)
+library(colorspace)
+library(here)
+library(ggridges)
+library(ggforce)
+library(ggbeeswarm)
+# ggplot2 settings so plots scale well for slide size 
+theme_set(theme_gray(16)) # 16 for full width, 18 for half width 
+update_geom_defaults("point", list(size = 2)) # 2 for full width, 2.5 for half width
+
+# this function should be added to cowplot
+align_legend <- function(p, hjust = 0.5)
+{
+  # extract legend
+  g <- cowplot::plot_to_gtable(p)
+  grobs <- g$grobs
+  legend_index <- which(sapply(grobs, function(x) x$name) == "guide-box")
+  legend <- grobs[[legend_index]]
+
+  # extract guides table
+  guides_index <- which(sapply(legend$grobs, function(x) x$name) == "layout")
+
+  # there can be multiple guides within one legend box  
+  for (gi in guides_index) {
+    guides <- legend$grobs[[gi]]
+    
+    # add extra column for spacing
+    # guides$width[5] is the extra spacing from the end of the legend text
+    # to the end of the legend title. If we instead distribute it by `hjust:(1-hjust)` on
+    # both sides, we get an aligned legend
+    spacing <- guides$width[5]
+    guides <- gtable::gtable_add_cols(guides, hjust*spacing, 1)
+    guides$widths[6] <- (1-hjust)*spacing
+    title_index <- guides$layout$name == "title"
+    guides$layout$l[title_index] <- 2
+
+    # reconstruct guides and write back
+    legend$grobs[[gi]] <- guides
+  }
+  
+  # reconstruct legend and write back
+  g$grobs[[legend_index]] <- legend
+  g
+}
+
+income_by_age <- readRDS(here("datasets", "income_by_age.rds"))
+
+titanic <- read_csv(here("datasets", "titanic.csv")) %>%
+  select(age, sex, class, survived) %>%
+  arrange(age, sex, class)
+
+lincoln_temps <- readRDS(here("datasets", "lincoln_temps.rds"))
+```
+
+class: center middle
+
+## Plots map data onto graphical elements
+
+---
+
+## Dataset:<br>Daily average temperatures for various locations
+
+.small-font[.center[
+```{r echo=FALSE, message=FALSE}
+temps_long <- read_csv(here("datasets", "tempnormals.csv")) %>%
+  mutate(
+    location = factor(
+      location, levels = c("Death Valley", "Houston", "San Diego", "Chicago")
+    )
+  )
+
+temps_long %>%
+  select(location, day_of_year, month, temperature) %>%
+  head(n = 15L) %>%
+  knitr::kable("html")
+```
+]]
+
+---
+
+## Temperatures mapped onto y position
+
+.center[
+```{r temp-normals-vs-time, echo=FALSE, message=FALSE, fig.width = 7, fig.asp = 0.618, dev="svg"}
+
+ggplot(temps_long, aes(x = date, y = temperature, color = location)) +
+  geom_line(size = 1) +
+  scale_x_date(
+    name = "month",
+    limits = c(ymd("0000-01-01"), ymd("0001-01-04")),
+    breaks = c(
+      ymd("0000-01-01"), ymd("0000-04-01"), ymd("0000-07-01"),
+      ymd("0000-10-01"), ymd("0001-01-01")
+    ),
+    labels = c("Jan", "Apr", "Jul", "Oct", "Jan"), expand = c(1/366, 0)
+  ) + 
+  scale_y_continuous(
+    limits = c(19.9, 107),
+    breaks = seq(20, 100, by = 20),
+    name = "temperature (°F)"
+  ) +
+  scale_color_manual(
+    name = NULL,
+    values = c("#E69F00", "#56B4E9", "#009E73", "#CC79A7")
+  ) +
+  theme_minimal_grid(16)
+```
+]
+
+???
+
+Figure redrawn from [Claus O. Wilke. Fundamentals of Data Visualization. O'Reilly, 2019.](https://clauswilke.com/dataviz)
+
+---
+
+## Temperatures mapped onto color
+
+<br>
+
+.center[
+```{r four-locations-temps-by-month, echo = FALSE, message = FALSE, fig.width = 8.5, fig.asp = .3, dev = "svg"}
+
+mean_temps <- temps_long %>%
+  group_by(location, month_name) %>%
+  summarize(mean = mean(temperature)) %>%
+  mutate(
+    month_name = factor(
+      month_name,
+      levels = c("Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec")
+    )
+  )
+
+p <- ggplot(mean_temps, aes(x = month_name, y = location, fill = mean)) + 
+  geom_tile(width = .95, height = 0.95) + 
+  scale_fill_viridis_c(
+    option = "B", begin = 0.15, end = 0.98,
+    name = "temperature (°F)"
+  ) + 
+  scale_x_discrete(name = "month") +
+  scale_y_discrete(name = NULL) +
+  coord_fixed(expand = FALSE) +
+  theme_half_open(16) +
+  theme(
+    axis.line = element_blank(),
+    axis.ticks = element_blank(),
+    legend.title = element_text(size = 14)
+  )
+
+# fix legend (make it centered)
+ggdraw(align_legend(p))
+```
+]
+
+???
+
+Figure redrawn from [Claus O. Wilke. Fundamentals of Data Visualization. O'Reilly, 2019.](https://clauswilke.com/dataviz)
+
+---
+
+## Commonly used aesthetics
+
+.center[
+<img src = "https://clauswilke.com/dataviz/aesthetic_mapping_files/figure-html/common-aesthetics-1.png", width = 90%></img>
+]
+
+???
+
+Figure from [Claus O. Wilke. Fundamentals of Data Visualization. O'Reilly, 2019.](https://clauswilke.com/dataviz)
+
+
+---
+
+## The same data values can be mapped to different aesthetics
+
+.center[
+<img src = "https://clauswilke.com/dataviz/aesthetic_mapping_files/figure-html/basic-scales-example-1.png", width = 90%></img>
+]
+
+???
+
+Figure from [Claus O. Wilke. Fundamentals of Data Visualization. O'Reilly, 2019.](https://clauswilke.com/dataviz)
+
+---
+
+## We can use many different aesthetics at once
+
+<br>
+
+.center.move-up-1em[
+```{r mtcars-five-scale, echo = FALSE, message = FALSE, fig.width = 5.5, fig.asp = .8, dev = "svg"}
+p_mtcars <- ggplot(mtcars, aes(disp, mpg, fill = hp, shape = factor(cyl), size = wt)) + 
+  geom_point(color = "white") +
+  scale_shape_manual(values = c(23, 24, 21), name = "cylinders") +
+  scale_fill_continuous_sequential(
+    palette = "Emrld", name = "power (hp)",
+    breaks = c(100, 200, 300),
+    rev = FALSE
+  ) +
+  xlab("displacement (cu. in.)") +
+  ylab("fuel efficiency (mpg)") +
+  guides(
+    shape = guide_legend(override.aes = list(size = 4, fill = "#329D84")),
+    size = guide_legend(override.aes = list(shape = 21, fill = "#329D84"),
+    title = "weight (1000 lbs)")
+  ) +
+  theme_half_open(14) + background_grid() +
+  theme(
+    legend.box.background = element_rect(fill = "white", color = "white"),
+    legend.position = "top",
+    legend.direction = "vertical",
+    legend.justification = "center",
+    legend.box.margin = margin(7, 7, 7, 7)
+  )
+legend <- get_legend(align_legend(p_mtcars))
+ggdraw() + 
+  draw_plot(p_mtcars + theme(legend.position = "none")) + 
+  draw_grob(
+    legend,
+    vjust = 1, hjust = 1, valign = 1, halign = 1,
+    x = 1, y = 1, width = .65, height = .3
+  )
+```
+]
+
+???
+
+Figure from [Claus O. Wilke. Fundamentals of Data Visualization. O'Reilly, 2019.](https://clauswilke.com/dataviz)
+
+[//]: # "segment ends here"
+
+---
+class: center middle
+
+
+## Creating aesthetic mappings in ggplot
+
+---
+
+## We define the mapping with `aes()`
+
+```{r echo=FALSE}
+temperatures <- temps_long %>%
+  select(location, station_id, day_of_year, month, temperature)
+```
+
+.small-font[
+```{r ggplot-temps-example, eval = FALSE}
+ggplot(
+  data = temperatures,
+  mapping = aes(x = day_of_year, y = temperature, color = location)
+) + geom_line()
+```
+]
+
+.center[
+```{r ggplot-temps-example-out, ref.label="ggplot-temps-example", echo=FALSE, fig.width = 5.5, fig.asp = 0.618, dev="svg"}
+```
+]
+
+
+---
+
+## We define the mapping with `aes()`
+
+.small-font[
+```{r ggplot-temps-example2, eval = FALSE}
+ggplot(
+  data = temperatures,
+  mapping = aes(x = day_of_year, y = location, color = temperature)
+) + geom_point(size = 5)
+```
+]
+
+.center[
+```{r ggplot-temps-example2-out, ref.label="ggplot-temps-example2", echo=FALSE, fig.width = 5.5*6/4.2, fig.asp = .3, dev="svg"}
+```
+]
+
+
+---
+
+## We frequently omit argument names
+
+Long form, all arguments are named:
+
+.small-font[
+```{r ggplot-temps-example3, eval = FALSE}
+ggplot(
+  data = temperatures,
+  mapping = aes(x = day_of_year, y = location, color = temperature)
+) + geom_point(size = 5)
+```
+]
+
+--
+
+Abbreviated form, common arguments remain unnamed:
+
+.small-font[
+```{r ggplot-temps-example4, eval = FALSE}
+ggplot(temperatures, aes(day_of_year, location, color = temperature)) + 
+  geom_point(size = 5)
+```
+]
+
+I prefer the long form, but if you see the abbreviated form now you know how it works.
+
+---
+
+## The geom determines how the data is shown
+
+.small-font[
+```{r ggplot-temps-example5, eval = FALSE}
+ggplot(temperatures, aes(day_of_year, temperature, color = location)) + 
+  geom_line()
+```
+]
+
+.center[
+```{r ggplot-temps-example5-out, ref.label="ggplot-temps-example5", echo=FALSE, fig.width = 5.5, fig.asp = 0.618, dev="svg"}
+```
+]
+
+
+---
+
+## The geom determines how the data is shown
+
+.small-font[
+```{r ggplot-temps-example6, eval = FALSE}
+ggplot(temperatures, aes(day_of_year, location, color = temperature)) +
+  geom_point(size = 5)
+```
+]
+
+.center[
+```{r ggplot-temps-example6-out, ref.label="ggplot-temps-example6", echo=FALSE, fig.width = 5.5*6/4.2, fig.asp = .3, dev="svg"}
+```
+]
+
+---
+
+## The geom determines how the data is shown
+
+.small-font[
+```{r ggplot-temps-example7, eval = FALSE}
+ggplot(temperatures, aes(month, temperature, color = location)) + 
+  geom_boxplot()
+```
+]
+
+
+.center[
+```{r ggplot-temps-example7-out, ref.label="ggplot-temps-example7", echo=FALSE, fig.width = 8, fig.asp = 0.5, dev="svg"}
+```
+]
+
+---
+
+## The geom determines how the data is shown
+
+.small-font[
+```{r ggplot-temps-example8, eval = FALSE}
+ggplot(temperatures, aes(month, temperature, fill = location)) + 
+  geom_violin() + 
+  facet_wrap(vars(location)) # make separate panel per location
+```
+]
+
+
+.center[
+```{r ggplot-temps-example8-out, ref.label="ggplot-temps-example8", echo=FALSE, fig.width = 9, fig.asp = 0.44, dev="svg"}
+```
+]
+
+[//]: # "segment ends here"
+
+---
+class: center middle
+
+
+## Important: `color` and `fill` apply to different elements
+
+---
+
+## `color` and `fill` apply to different elements
+
+`color`<br>
+Applies color to points, lines, text, borders
+
+--
+
+`fill`<br>
+Applies color to any filled areas 
+
+---
+
+## Many geoms have both `color` and `fill` aesthetics
+
+.tiny-font[
+```{r ggplot-color-fill, eval = FALSE}
+ggplot(temperatures, aes(month, temperature, color = location)) + 
+  geom_boxplot()
+```
+]
+
+
+.center[
+```{r ggplot-color-fill-out, ref.label="ggplot-color-fill", echo=FALSE, fig.width = 8, fig.asp = 0.5, dev="svg"}
+```
+]
+
+---
+
+## Many geoms have both `color` and `fill` aesthetics
+
+.tiny-font[
+```{r ggplot-color-fill2, eval = FALSE}
+ggplot(temperatures, aes(month, temperature, fill = location)) + 
+  geom_boxplot()
+```
+]
+
+
+.center[
+```{r ggplot-color-fill2-out, ref.label="ggplot-color-fill2", echo=FALSE, fig.width = 8, fig.asp = 0.5, dev="svg"}
+```
+]
+
+---
+
+## Many geoms have both `color` and `fill` aesthetics
+
+.tiny-font[
+```{r ggplot-color-fill3, eval = FALSE}
+ggplot(temperatures, aes(month, temperature, color = location, fill = location)) + 
+  geom_boxplot()
+```
+]
+
+
+.center[
+```{r ggplot-color-fill3-out, ref.label="ggplot-color-fill3", echo=FALSE, fig.width = 8, fig.asp = 0.5, dev="svg"}
+```
+]
+
+---
+
+## Aesthetics can also be used as parameters in geoms
+
+.tiny-font[
+```{r ggplot-color-fill-params, eval = FALSE}
+ggplot(temperatures, aes(month, temperature, fill = location)) + 
+  geom_boxplot(color = "steelblue")
+```
+]
+
+
+.center[
+```{r ggplot-color-fill-params-out, ref.label="ggplot-color-fill-params", echo=FALSE, fig.width = 8, fig.asp = 0.5, dev="svg"}
+```
+]
+
+
+---
+
+## Aesthetics can also be used as parameters in geoms
+
+.tiny-font[
+```{r ggplot-color-fill-params2, eval = FALSE}
+ggplot(temperatures, aes(month, temperature, color = location)) + 
+  geom_boxplot(fill = "steelblue")
+```
+]
+
+
+.center[
+```{r ggplot-color-fill-params2-out, ref.label="ggplot-color-fill-params2", echo=FALSE, fig.width = 8, fig.asp = 0.5, dev="svg"}
+```
+]
+
+[//]: # "segment ends here"
+
+---
+
+## Exercise 
+
+Time to try it out yourself!
+
+Got to [https://elsherbini.github.io/AMNH_R_Workshop_2023/modules/data-wrangling-module/](https://elsherbini.github.io/AMNH_R_Workshop_2023/modules/data-wrangling-module/) and complete the excerise.
+
+---
+
+
+## We often encounter datasets containing simple amounts
+
+---
+
+## We often encounter datasets containing simple amounts
+
+Example: Highest grossing movies Dec. 2017
+
+<br>
+
+.center[
+```{r echo = FALSE}
+# Data from Box Office Mojo for Dec. 22-24, 2017. 
+boxoffice <- tibble(
+  rank = 1:5,
+  title = c("Star Wars", "Jumanji", "Pitch Perfect 3", "Greatest Showman", "Ferdinand"),
+  amount = c(71.57, 36.17, 19.93, 8.81, 7.32) # million USD
+)
+
+boxoffice %>%
+  knitr::kable("html")
+```
+]
+
+.tiny-font.absolute-bottom-right[
+Data source: Box Office Mojo
+]
+
+---
+
+## We can visualize amounts with bar plots
+
+<br>
+
+.center.move-up-1em[
+```{r boxoffice-vertical, echo = FALSE, fig.width = 8.5, fig.asp = .5, dev = "svg"}
+boxoffice %>%
+  ggplot(aes(x = fct_reorder(title, rank), y = amount)) +
+    geom_col(fill = "#56B4E9", width = 0.6, alpha = 0.9) +
+    scale_y_continuous(
+      expand = c(0, 0),
+      breaks = c(0, 20, 40, 60),
+      labels = c("0", "20", "40", "60"),
+      name = "weekend gross (million USD)"
+    ) +
+    scale_x_discrete(
+      name = NULL,
+      expand = c(0, 0.4)
+    ) +
+    coord_cartesian(clip = "off") +
+    theme_minimal_hgrid(12, rel_small = 1) +
+    theme(
+      axis.line.x = element_blank(),
+      axis.ticks.x = element_blank()
+    )
+```
+]
+
+---
+
+## Bars can also run horizontally
+
+<br>
+
+.center.move-up-1em[
+```{r boxoffice-horizontal, echo = FALSE, fig.width = 7, fig.asp = .618, dev = "svg"}
+ggplot(boxoffice, aes(x = fct_reorder(title, desc(rank)), y = amount)) +
+  geom_col(fill = "#56B4E9", alpha = 0.9) +
+  scale_y_continuous(
+    limits = c(0, 75),
+    expand = c(0, 0),
+    breaks = c(0, 20, 40, 60),
+    labels = c("0", "20", "40", "60"),
+    name = "weekend gross (million USD)"
+  ) +
+  scale_x_discrete(
+    name = NULL,
+    expand = c(0, 0.5)
+  ) +
+  coord_flip(clip = "off") +
+  theme_minimal_vgrid(rel_small = 1) +
+  theme(
+    axis.line.y = element_blank(),
+    axis.ticks.y = element_blank()
+  )
+```
+]
+
+---
+
+## Avoid rotated axis labels
+
+.center[
+```{r boxoffice-rot-axis-tick-labels, echo = FALSE, fig.width = 6, fig.asp = .85, dev = "svg"}
+p_box_axrot <- 
+  ggplot(boxoffice, aes(x = fct_reorder(title, rank), y = amount)) +
+    geom_col(fill = "#56B4E9", alpha = 0.9) +
+    scale_y_continuous(
+      expand = c(0, 0),
+      breaks = c(0, 20, 40, 60),
+      labels = c("0", "20", "40", "60"),
+      name = "weekend gross (million USD)"
+    ) +
+    scale_x_discrete(name = NULL) +
+    coord_cartesian(clip = "off") +
+    theme_minimal_hgrid(rel_small = 1) +
+    theme(
+      axis.line.x = element_blank(),
+      axis.ticks.x = element_blank(),
+      axis.text.x = element_text(angle = 45, vjust = 1, hjust = 1),
+      plot.margin = margin(3, 7, 3, 1.5)
+    )
+
+stamp_ugly(p_box_axrot)
+```
+]
+
+
+---
+
+## Avoid rotated axis labels
+
+<br>
+
+.center.move-up-1em[
+![](`r knitr::fig_chunk("boxoffice-horizontal", "svg")`)
+]
+
+---
+
+## Pay attention to the order of the bars
+
+<br>
+
+.center.move-up-1em[
+```{r boxoffice-horizontal-unordered, echo = FALSE, fig.width = 7, fig.asp = .618, dev = "svg"}
+p_box_noorder <- ggplot(boxoffice) +
+  aes(
+    x = factor(title, levels = title[c(2, 1, 5, 3, 4)]),
+    y = amount
+  ) +
+  geom_col(fill = "#56B4E9", alpha = 0.9) +
+  scale_y_continuous(
+    limits = c(0, 75),
+    expand = c(0, 0),
+    breaks = c(0, 20, 40, 60),
+    labels = c("0", "20", "40", "60"),
+    name = "weekend gross (million USD)"
+  ) +
+  scale_x_discrete(
+    name = NULL,
+    expand = c(0, 0.5)
+  ) +
+  coord_flip(clip = "off") +
+  theme_minimal_vgrid(rel_small = 1) +
+  theme(
+    axis.line.y = element_blank(),
+    axis.ticks.y = element_blank()
+  )
+
+stamp_bad(p_box_noorder)
+```
+]
+
+---
+
+## Pay attention to the order of the bars
+
+<br>
+
+.center.move-up-1em[
+![](`r knitr::fig_chunk("boxoffice-horizontal", "svg")`)
+]
+
+---
+
+## We can use dots instead of bars
+
+<br>
+
+.center.move-up-1em[
+```{r boxoffice-dotplot, echo = FALSE, fig.width = 7, fig.asp = .618, dev = "svg"}
+ggplot(boxoffice, aes(x = fct_reorder(title, desc(rank)), y = amount)) +
+  geom_point(color = "#0072B2", size = 4) +
+  scale_y_continuous(
+    limits = c(0, 75),
+    expand = c(0, 0),
+    breaks = c(0, 20, 40, 60),
+    labels = c("0", "20", "40", "60"),
+    name = "weekend gross (million USD)"
+  ) +
+  scale_x_discrete(
+    name = NULL,
+    expand = c(0, 0.5)
+  ) +
+  coord_flip(clip = "off") +
+  theme_minimal_vgrid(rel_small = 1) +
+  theme(
+    axis.line.y = element_blank(),
+    axis.ticks.y = element_blank()
+  )
+```
+]
+
+---
+
+## Dots are preferable if we want to truncate the axes
+
+.center.move-up-1em[
+```{r Americas-life-expect, echo = FALSE, fig.width = 6., fig.asp = .9, dev = "svg"}
+library(gapminder)
+
+df_Americas <- gapminder %>% filter(year == 2007, continent == "Americas")
+
+ggplot(df_Americas, aes(x = lifeExp, y = fct_reorder(country, lifeExp))) +
+  geom_point(color = "#0072B2", size = 3) +
+  scale_x_continuous(
+    name = "life expectancy (years)",
+    limits = c(59.7, 81.5),
+    expand = c(0, 0)
+  ) +
+  scale_y_discrete(name = NULL, expand = c(0, 0.5)) +
+  theme_minimal_grid(12, rel_small = 1) +
+  theme(
+    plot.margin = margin(18, 6, 3, 1.5)
+  )
+```
+]
+
+---
+
+## Dots are preferable if we want to truncate the axes
+
+.center.move-up-1em[
+```{r Americas-life-expect-bad1, echo = FALSE, fig.width = 6., fig.asp = .9, dev = "svg"}
+p <- ggplot(df_Americas, aes(x = lifeExp, y = fct_reorder(country, lifeExp))) +
+  geom_col(fill = "#56B4E9", alpha = 0.9) +
+  scale_x_continuous(
+    name = "life expectancy (years)",
+    expand = c(0, 0)
+  ) +
+  scale_y_discrete(name = NULL, expand = c(0, 0.5)) +
+  coord_cartesian(xlim = c(59.7, 81.5)) +
+  theme_minimal_grid(12, rel_small = 1) +
+  theme(
+    plot.margin = margin(18, 6, 3, 1.5)
+  )
+
+stamp_bad(p)
+```
+]
+
+.absolute-bottom-right[
+bar lengths do<br>not accurately<br>represent the<br>data values
+]
+
+---
+
+## Dots are preferable if we want to truncate the axes
+
+.center.move-up-1em[
+```{r Americas-life-expect-bad2, echo = FALSE, fig.width = 6., fig.asp = .9, dev = "svg"}
+p <- ggplot(df_Americas, aes(x = lifeExp, y = fct_reorder(country, lifeExp))) +
+  geom_col(fill = "#56B4E9", alpha = 0.9) +
+  scale_x_continuous(
+    name = "life expectancy (years)",
+    expand = c(0, 0)
+  ) +
+  scale_y_discrete(name = NULL, expand = c(0, 0.5)) +
+  coord_cartesian(xlim = c(0, 85)) +
+  theme_minimal_grid(12, rel_small = 1) +
+  theme(
+    plot.margin = margin(18, 6, 3, 1.5)
+  )
+
+stamp_bad(p)
+```
+]
+
+.absolute-bottom-right[
+key features<br>of the data<br>are obscured
+]
+
+
+---
+
+## Dots are preferable if we want to truncate the axes
+
+.center.move-up-1em[
+![](`r knitr::fig_chunk("Americas-life-expect", "svg")`)
+]
+
+[//]: # "segment ends here"
+
+---
+class: center middle
+
+## Grouped bars
+
+---
+
+## We use grouped bars for higher-dimensional datasets
+
+--
+
+<br>
+
+.center.move-up-1em[
+```{r income-by-age-race-dodged, echo = FALSE, fig.width = 9, fig.asp = 0.5, dev = "svg"}
+# Take the darkest four colors from 5-class ColorBrewer palette "PuBu"
+# colors_four <- RColorBrewer::brewer.pal(5, "PuBu")[5:2]
+colors_four <- c("#045A8D", "#2B8CBE", "#74A9CF", "#BDC9E1")
+
+ggplot(income_by_age, aes(x = age, y = median_income, fill = race)) +
+  geom_col(position = "dodge", alpha = 0.9) +
+  scale_y_continuous(
+    expand = c(0, 0),
+    name = "median income (USD)",
+    breaks = c(0, 20000, 40000, 60000, 80000, 100000),
+    labels = c("$0", "$20,000", "$40,000", "$60,000", "$80,000", "$100,000")
+  ) +
+  scale_fill_manual(values = colors_four, name = NULL) +
+  coord_cartesian(clip = "off") +
+  xlab("age (years)") +
+  theme_minimal_hgrid() +
+  theme(
+    axis.line.x = element_blank(),
+    axis.ticks.x = element_blank()
+  )
+```
+]
+
+.absolute-bottom-right[
+Data source: United States Census Bureau, 2016
+]
+
+---
+
+## We are free to choose by which variable to group
+
+<br>
+
+.center[
+```{r income-by-race-age-dodged, echo = FALSE, fig.width = 8, fig.asp = 0.4, dev = "svg"}
+# Take the darkest seven colors from 8-class ColorBrewer palette "PuBu"
+# colors_seven <- RColorBrewer::brewer.pal(8, "PuBu")[2:8]
+colors_seven <- c("#ECE7F2", "#D0D1E6", "#A6BDDB", "#74A9CF", "#3690C0", "#0570B0", "#034E7B")
+
+ggplot(income_by_age, aes(x = race, y = median_income, fill = age)) +
+  geom_col(position = "dodge", alpha = 0.9) +
+  scale_y_continuous(
+    expand = c(0, 0),
+    name = "median income (USD)",
+    breaks = c(0, 20000, 40000, 60000, 80000, 100000),
+    labels = c("$0", "$20,000", "$40,000", "$60,000", "$80,000", "$100,000")
+  ) +
+  scale_fill_manual(values = colors_seven, name = "age (yrs)") +
+  coord_cartesian(clip = "off") +
+  xlab(label = NULL) +
+  theme_minimal_hgrid() +
+  theme(
+    axis.line.x = element_blank(),
+    axis.ticks.x = element_blank(),
+    legend.title.align = 0.5
+  )
+```
+]
+
+.absolute-bottom-right[
+Data source: United States Census Bureau, 2016
+]
+
+---
+
+## We can also use multiple plot panels (facets)
+
+.center[
+```{r income-by-age-race-faceted, echo = FALSE, fig.width = 8, fig.asp = 0.618, dev = "svg"}
+ggplot(income_by_age, aes(x = age_brief, y = median_income)) +
+  geom_col(fill = "#56B4E9", alpha = 0.9) +
+  scale_y_continuous(
+    expand = c(0, 0),
+    name = "median income (USD)",
+    breaks = c(0, 20000, 40000, 60000, 80000, 100000),
+    labels = c("$0", "$20,000", "$40,000", "$60,000", "$80,000", "$100,000")
+  ) +
+  coord_cartesian(clip = "off") +
+  xlab(label = "age (years)") +
+  facet_wrap(~race, scales = "free_x") +
+  theme_minimal_hgrid(12) +
+  theme(
+    axis.ticks.x = element_blank(),
+    axis.line = element_blank(),
+    strip.text = element_text(size = 12),
+    panel.spacing.y = grid::unit(14, "pt")
+  )
+```
+]
+
+.absolute-bottom-right[
+Data source: United States Census Bureau, 2016
+]
+
+[//]: # "segment ends here"
+
+---
+class: center middle
+
+## Making bar plots in **ggplot2**
+
+---
+
+## Dataset: Highest grossing movies Dec. 2017
+
+.tiny-font[
+```{r}
+# Data from Box Office Mojo for Dec. 22-24, 2017. 
+boxoffice <- tibble(
+  rank = 1:5,
+  title = c("Star Wars", "Jumanji", "Pitch Perfect 3", "Greatest Showman", "Ferdinand"),
+  amount = c(71.57, 36.17, 19.93, 8.81, 7.32) # million USD
+)
+
+boxoffice
+```
+]
+
+
+---
+
+## Visualize as a bar plot
+
+.small-font[
+```{r boxoffice-naive, eval = FALSE}
+ggplot(boxoffice, aes(title, amount)) +
+  geom_col()  # "col" stands for column
+```
+]
+
+--
+
+.center[
+```{r boxoffice-naive-out, ref.label = "boxoffice-naive", echo = FALSE, fig.width = 8, fig.asp = 0.4, dev = "svg"}
+```
+]
+
+
+---
+
+## Order by data value
+
+.small-font[
+```{r boxoffice-ordered, eval = FALSE}
+ggplot(boxoffice, aes(fct_reorder(title, amount), amount)) +
+  geom_col()
+```
+]
+
+.center[
+```{r boxoffice-ordered-out, ref.label = "boxoffice-ordered", echo = FALSE, fig.width = 8, fig.asp = 0.4, dev = "svg"}
+```
+]
+
+---
+
+## Order by data value, descending
+
+.small-font[
+```{r boxoffice-ordered2, eval = FALSE}
+ggplot(boxoffice, aes(fct_reorder(title, -amount), amount)) +
+  geom_col() + 
+  xlab(NULL) # remove x axis label
+```
+]
+
+.center[
+```{r boxoffice-ordered2-out, ref.label = "boxoffice-ordered2", echo = FALSE, fig.width = 8, fig.asp = 0.4, dev = "svg"}
+```
+]
+
+
+---
+
+## Flip x and y, set custom x axis label
+
+.small-font[
+```{r boxoffice-ordered3, eval = FALSE}
+ggplot(boxoffice, aes(amount, fct_reorder(title, amount))) +
+  geom_col() +
+  xlab("amount (in million USD)") +
+  ylab(NULL)
+```
+]
+
+.center[
+```{r boxoffice-ordered3-out, ref.label = "boxoffice-ordered3", echo = FALSE, fig.width = 5.5, fig.asp = 0.618, dev = "svg"}
+```
+]
+
+---
+class: center middle
+
+## Sometimes we need to count before visualization
+
+
+---
+background-image: url(https://raw.githubusercontent.com/allisonhorst/palmerpenguins/master/man/figures/logo.png)
+background-position: 95% 5%
+background-size: 8%
+
+
+## Goal: Visualize number of penguins per species
+
+.small-font[
+```{r}
+library(palmerpenguins)
+head(penguins)
+```
+]
+
+???
+
+Image credit: [Artwork by @allison_horst](https://github.com/allisonhorst/palmerpenguins/#artwork)
+
+---
+
+## Use `geom_bar()` to count before plotting
+
+.small-font[
+```{r penguins-bars, eval = FALSE}
+ggplot(penguins, aes(y = species)) + # note: no x aesthetic defined
+  geom_bar()
+```
+]
+
+.center[
+```{r penguins-bars-out, ref.label = "penguins-bars", echo = FALSE, fig.width = 5.5, fig.asp = 0.618, dev = "svg"}
+```
+]
+
+
+---
+
+## Getting the bars into the right order
+
+---
+
+## Getting the bars into the right order
+
+Option 1: Manually, using `fct_relevel()`
+
+.tiny-font[
+```{r penguins-bars2, eval = FALSE}
+ggplot(penguins, aes(y = fct_relevel(species, "Chinstrap", "Gentoo", "Adelie"))) +
+  geom_bar() +
+  ylab(NULL)
+```
+]
+
+.center[
+```{r penguins-bars2-out, ref.label = "penguins-bars2", echo = FALSE, fig.width = 5.5, fig.asp = 0.618, dev = "svg"}
+```
+]
+
+---
+
+## Getting the bars into the right order
+
+Option 2: Using `fct_rev()` and `fct_infreq()` from the **forcats** package
+
+.tiny-font[
+```{r penguins-bars3, eval = FALSE}
+ggplot(penguins, aes(y = fct_rev(fct_infreq(species)))) +
+  geom_bar() +
+  ylab(NULL)
+```
+]
+
+.center[
+```{r penguins-bars3-out, ref.label = "penguins-bars3", echo = FALSE, fig.width = 5.5, fig.asp = 0.618, dev = "svg"}
+```
+]
+
+
+---
+
+## Display counts by species and sex
+
+.small-font[
+```{r penguins-sex-species, eval = FALSE}
+ggplot(penguins, aes(sex, fill = species)) +
+  geom_bar()
+```
+]
+
+.center[
+```{r penguins-sex-species-out, ref.label = "penguins-sex-species", echo = FALSE, fig.width = 5.5, fig.asp = 0.618, dev = "svg"}
+```
+]
+
+---
+
+## Remove missing values (`NA`s)
+
+.tiny-font[
+```{r penguins-sex-species2, eval = FALSE}
+penguins_nomissing <- na.omit(penguins) # remove all rows with any missing values
+
+ggplot(penguins_nomissing, aes(sex, fill = species)) +
+  geom_bar()
+```
+]
+
+.center[
+```{r penguins-sex-species2-out, ref.label = "penguins-sex-species2", echo = FALSE, fig.width = 5.5, fig.asp = 0.618, dev = "svg"}
+```
+]
+
+---
+
+## Positions define how subgroups are shown
+
+`position = "dodge"`: Place bars for subgroups side-by-side
+
+.small-font[
+```{r penguins-sex-species-dodge, eval = FALSE}
+ggplot(penguins_nomissing, aes(sex, fill = species)) +
+  geom_bar(position = "dodge")
+```
+]
+
+.center[
+```{r penguins-sex-species-dodge-out, ref.label = "penguins-sex-species-dodge", echo = FALSE, fig.width = 5.5, fig.asp = 0.618, dev = "svg"}
+```
+]
+
+
+---
+
+## Positions define how subgroups are shown
+
+`position = "stack"`: Place bars for subgroups on top of each other
+
+.small-font[
+```{r penguins-sex-species-stack, eval = FALSE}
+ggplot(penguins_nomissing, aes(sex, fill = species)) +
+  geom_bar(position = "stack")
+```
+]
+
+.center[
+```{r penguins-sex-species-stack-out, ref.label = "penguins-sex-species-stack", echo = FALSE, fig.width = 5.5, fig.asp = 0.618, dev = "svg"}
+```
+]
+
+
+---
+
+## Positions define how subgroups are shown
+
+`position = "fill"`: Like `"stack"`, but scale to 100%
+
+.small-font[
+```{r penguins-sex-species-fill, eval = FALSE}
+ggplot(penguins_nomissing, aes(sex, fill = species)) +
+  geom_bar(position = "fill")
+```
+]
+
+.center[
+```{r penguins-sex-species-fill-out, ref.label = "penguins-sex-species-fill", echo = FALSE, fig.width = 5.5, fig.asp = 0.618, dev = "svg"}
+```
+]
+
+[//]: # "segment ends here"
+
+---
+
+## Exercise 2
+
+Time to try it out yourself!
+
+Got to [https://elsherbini.github.io/AMNH_R_Workshop_2023/modules/data-wrangling-module/](https://elsherbini.github.io/AMNH_R_Workshop_2023/modules/data-wrangling-module/) and complete the exerise.
+
+---
+
+
+## Histograms and density plots
+
+---
+
+## Passengers on the Titanic
+
+.center.small-font[
+```{r echo = FALSE}
+knitr::kable(titanic[1:10,], "html")
+```
+&nbsp;&nbsp;&nbsp;&nbsp;
+```{r echo = FALSE}
+knitr::kable(titanic[11:20,], "html")
+```
+&nbsp;&nbsp;&nbsp;&nbsp;
+```{r echo = FALSE}
+knitr::kable(titanic[21:30,], "html")
+```
+]
+
+---
+
+## Histogram: Define bins and count cases
+
+```{r echo = FALSE}
+age_counts <- hist(titanic$age, breaks = (0:15) * 5 + .01, plot = FALSE)$counts
+age_hist <- tibble(
+  `age range` = c("0–5", "6–10", "11–15", "16–20", "21–25", "26–30", "31–35", "36–40", "41–45", "46–50", "51–55", "56–60", "61–65", "66–70", "71–75", "76–80"),
+  count = c(age_counts, 0)
+)
+```
+
+.pull-left.small-font[
+```{r echo = FALSE}
+knitr::kable(age_hist[1:8,], "html")
+```
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;
+```{r echo = FALSE}
+knitr::kable(age_hist[9:16,], "html")
+```
+]
+
+--
+
+.pull-right[
+```{r titanic-age-hist, echo = FALSE, fig.width = 5.5, fig.asp = 0.618, dev = "svg"}
+age_hist5 <- age_hist %>%
+  mutate(age = (1:16) * 5 - 2.5) %>%
+  filter(count > 0)
+
+h1 <- ggplot(age_hist5, aes(x = age, y = count)) + 
+  geom_col(width = 4.7, fill = "#56B4E9", na.rm = TRUE)  + 
+  scale_y_continuous(expand = c(0, 0), breaks = 25 * (0:5)) +
+  scale_x_continuous(name = "age (years)", limits = c(0, 75), expand = c(0, 0)) +
+  coord_cartesian(clip = "off") +
+  theme_minimal_hgrid(18) +
+  theme(
+    axis.line.x = element_blank()
+  )
+
+h1
+```
+]
+
+???
+
+Figure redrawn from [Claus O. Wilke. Fundamentals of Data Visualization. O'Reilly, 2019.](https://clauswilke.com/dataviz)
+
+
+---
+
+# Histograms depend on the chosen bin width
+
+.center[
+```{r titanic-age-hist-binwidth, echo = FALSE, fig.width = 8, fig.asp = 0.618, dev = "svg"}
+age_hist_1 <- tibble(
+  age = (1:75) - 0.5, 
+  count = hist(titanic$age, breaks = (0:75) + .01, plot = FALSE)$counts
+)
+age_hist_3 <- tibble(
+  age = (1:25) * 3 - 1.5, 
+  count = hist(titanic$age, breaks = (0:25) * 3 + .01, plot = FALSE)$counts
+)
+age_hist_15 <- tibble(
+  age = (1:5) * 15 - 7.5, 
+  count = hist(titanic$age, breaks = (0:5) * 15 + .01, plot = FALSE)$counts
+)
+
+
+h2 <- ggplot(age_hist_1, aes(x = age, y = count)) + 
+  geom_col(width = .85, fill = "#56B4E9")  + 
+  scale_y_continuous(expand = c(0, 0), breaks = 10 * (0:5)) +
+  scale_x_continuous(name = "age (years)", limits = c(0, 75), expand = c(0, 0)) +
+  coord_cartesian(clip = "off") +
+  theme_minimal_hgrid(14) +
+  theme(
+    axis.line.x = element_blank()
+  )
+
+h3 <- ggplot(age_hist_3, aes(x = age, y = count)) + 
+  geom_col(width = 2.75, fill = "#56B4E9")  + 
+  scale_y_continuous(expand = c(0, 0), breaks = 25 * (0:5)) +
+  scale_x_continuous(name = "age (years)", limits = c(0, 75), expand = c(0, 0)) +
+  coord_cartesian(clip = "off") +
+  theme_minimal_hgrid(14) +
+  theme(
+    axis.line.x = element_blank()
+  )
+
+h4 <- ggplot(age_hist_15, aes(x = age, y = count)) + 
+  geom_col(width = 14.5, fill = "#56B4E9")  + 
+  scale_y_continuous(expand = c(0, 0), breaks = 100 * (0:4)) +
+  scale_x_continuous(name = "age (years)", limits = c(0, 75), expand = c(0, 0)) +
+  coord_cartesian(clip = "off") +
+  theme_minimal_hgrid(14) +
+  theme(
+    axis.line.x = element_blank()
+  )
+
+h1 <- h1 + theme_minimal_hgrid(16) +
+  theme(
+    axis.line.x = element_blank()
+  )
+
+plot_grid(
+  h2, NULL, h3,
+  NULL, NULL, NULL,
+  h1, NULL, h4,
+  align = 'hv',
+  rel_widths = c(1, .04, 1),
+  rel_heights = c(1, .04, 1)
+)
+```
+]
+
+???
+
+Figure redrawn from [Claus O. Wilke. Fundamentals of Data Visualization. O'Reilly, 2019.](https://clauswilke.com/dataviz)
+
+
+---
+
+
+## Alternative to histogram: Kernel density estimate (KDE)
+
+.pull-left[
+```{r titanic-age-hist2, echo = FALSE, fig.width = 7, fig.asp = 0.618, dev = "svg"}
+h1 + ggtitle("Histogram") + theme(plot.title.position = "plot")
+```
+]
+
+--
+
+.pull-right[
+```{r titanic-age-kde, echo = FALSE, fig.width = 7, fig.asp = 0.618, dev = "svg"}
+ggplot(titanic, aes(x = age)) + 
+  geom_density(fill = "#56B4E9", color = darken("#56B4E9", 0.5), bw = 2, kernel = "gaussian") + 
+  scale_y_continuous(limits = c(0, 0.046), expand = c(0, 0), name = "density") +
+  scale_x_continuous(name = "age (years)", limits = c(0, 75), expand = c(0, 0)) +
+  coord_cartesian(clip = "off") +
+  ggtitle("Kernel density estimate") +
+  theme_minimal_hgrid(18) +
+  theme(
+    axis.line.x = element_blank(),
+    plot.title.position = "plot"
+  )
+```
+]
+
+--
+
+Histograms show raw counts, KDEs show proportions. (Total area = 1)
+
+???
+
+Figures redrawn from [Claus O. Wilke. Fundamentals of Data Visualization. O'Reilly, 2019.](https://clauswilke.com/dataviz)
+
+---
+
+
+## KDEs also depend on parameter settings
+
+.center[
+```{r titanic-age-kde-grid, echo = FALSE, fig.width = 8, fig.asp = 0.618, dev = "svg"}
+pdens1 <- ggplot(titanic, aes(x = age)) + 
+  geom_density(fill = "#56B4E9", color = darken("#56B4E9", 0.5), bw = .5, kernel = "gaussian") + 
+  scale_y_continuous(limits = c(0, 0.046), expand = c(0, 0), name = "density") +
+  scale_x_continuous(name = "age (years)", limits = c(0, 75), expand = c(0, 0)) +
+  coord_cartesian(clip = "off") +
+  theme_minimal_hgrid(14) +
+  theme(axis.line.x = element_blank())
+
+pdens2 <- ggplot(titanic, aes(x = age)) + 
+  geom_density(fill = "#56B4E9", color = darken("#56B4E9", 0.5), bw = 2, kernel = "gaussian") + 
+  scale_y_continuous(limits = c(0, 0.046), expand = c(0, 0), name = "density") +
+  scale_x_continuous(name = "age (years)", limits = c(0, 75), expand = c(0, 0)) +
+  coord_cartesian(clip = "off") +
+  theme_minimal_hgrid(14) +
+  theme(axis.line.x = element_blank())
+
+pdens3 <- ggplot(titanic, aes(x = age)) + 
+  geom_density(fill = "#56B4E9", color = darken("#56B4E9", 0.5), bw = 5, kernel = "gaussian") + 
+  scale_y_continuous(limits = c(0, 0.046), expand = c(0, 0), name = "density") +
+  scale_x_continuous(name = "age (years)", limits = c(0, 75), expand = c(0, 0)) +
+  coord_cartesian(clip = "off") +
+  theme_minimal_hgrid(14) +
+  theme(axis.line.x = element_blank())
+
+pdens4 <- ggplot(titanic, aes(x = age)) + 
+  geom_density(fill = "#56B4E9", color = darken("#56B4E9", 0.5), bw = 2, kernel = "rectangular") + 
+  scale_y_continuous(limits = c(0, 0.046), expand = c(0, 0), name = "density") +
+  scale_x_continuous(name = "age (years)", limits = c(0, 75), expand = c(0, 0)) +
+  coord_cartesian(clip = "off") +
+  theme_minimal_hgrid(14) +
+  theme(axis.line.x = element_blank())
+
+plot_grid(
+  pdens1, NULL, pdens2, 
+  NULL, NULL, NULL,
+  pdens3, NULL, pdens4,
+  align = 'hv',
+  rel_widths = c(1, .04, 1),
+  rel_heights = c(1, .04, 1)
+)
+```
+]
+
+
+???
+
+Figure redrawn from [Claus O. Wilke. Fundamentals of Data Visualization. O'Reilly, 2019.](https://clauswilke.com/dataviz)
+
+
+---
+
+## Careful: KDEs can show non-sensical data
+
+.center[
+```{r titanic-age-kde-wrong, echo = FALSE, fig.width = 7, fig.asp = 0.618, dev = "svg"}
+pdens_neg <- ggplot(titanic, aes(x = age)) + 
+  geom_density(fill = "#56B4E9", color = darken("#56B4E9", 0.5)) + 
+  scale_y_continuous(limits = c(0, 0.046), expand = c(0, 0), name = "density") +
+  scale_x_continuous(name = "age (years)", limits = c(-10, 79), expand = c(0, 0)) +
+  coord_cartesian(clip = "off") +
+  theme_minimal_hgrid(16) +
+  theme(
+    axis.line.x = element_blank()
+  )
+stamp_wrong(pdens_neg)
+```
+]
+
+???
+
+Figure redrawn from [Claus O. Wilke. Fundamentals of Data Visualization. O'Reilly, 2019.](https://clauswilke.com/dataviz)
+
+---
+
+## Careful: Are bars stacked or overlapping?
+
+.pull-left[
+```{r titanic-age-hist-stacked, echo = FALSE, fig.width = 7, fig.asp = 0.618, dev = "svg"}
+gender_counts <- tibble(
+  age = (1:25)*3 - 1.5, 
+  male = hist(filter(titanic, sex == "male")$age, breaks = (0:25)*3 + .01, plot = FALSE)$counts,
+  female = hist(filter(titanic, sex == "female")$age, breaks = (0:25)*3 + .01, plot = FALSE)$counts
+) %>%
+  pivot_longer(-age, names_to = "gender", values_to = "count")
+
+gender_counts$gender <- factor(gender_counts$gender, levels = c("female", "male"))
+
+ggplot(gender_counts, aes(x = age, y = count, fill = gender)) + 
+  geom_col(position = "stack") +
+  scale_x_continuous(name = "age (years)", limits = c(0, 75), expand = c(0, 0)) +
+  scale_y_continuous(limits = c(0, 89), expand = c(0, 0), name = "count") +
+  scale_fill_manual(values = c("#D55E00", "#0072B2")) +
+  coord_cartesian(clip = "off") +
+  theme_minimal_hgrid(18) +
+  theme(
+    axis.line.x = element_blank(),
+    legend.position = c(.9, .87),
+    legend.justification = c("right", "top"),
+    legend.box.background = element_rect(fill = "white", color = "white")
+  )
+```
+]
+
+--
+
+.pull-right[
+```{r titanic-age-hist-overlap, echo = FALSE, fig.width = 7, fig.asp = 0.618, dev = "svg"}
+ggplot(gender_counts, aes(x = age, y = count, fill = gender)) + 
+  geom_col(position = "identity", alpha = 0.7) +
+  scale_x_continuous(name = "age (years)", limits = c(0, 75), expand = c(0, 0)) +
+  scale_y_continuous(limits = c(0, 56), expand = c(0, 0), name = "count") +
+  scale_fill_manual(
+    values = c("#D55E00", "#0072B2"),
+    guide = guide_legend(reverse = TRUE)
+  ) +
+  coord_cartesian(clip = "off") +
+  theme_minimal_hgrid(18) +
+  theme(
+    axis.line.x = element_blank(),
+    legend.position = c(.9, .87),
+    legend.justification = c("right", "top"),
+    legend.box.background = element_rect(fill = "white", color = "white")
+  )
+```
+]
+
+--
+
+Stacked or overlapping histograms are rarely a good choice.
+
+???
+
+Figures redrawn from [Claus O. Wilke. Fundamentals of Data Visualization. O'Reilly, 2019.](https://clauswilke.com/dataviz)
+
+---
+
+## Alternatively: Age pyramid
+
+.center[
+```{r titanic-age-pyramid, echo = FALSE, fig.width = 7, fig.asp = 0.618, dev = "svg"}
+ggplot(gender_counts, aes(x = age, y = ifelse(gender == "male", -1, 1)*count, fill = gender)) + 
+  geom_col() +
+  scale_x_continuous(name = "age (years)", limits = c(0, 75), expand = c(0, 0)) +
+  scale_y_continuous(name = "count", breaks = 20*(-2:1), labels = c("40", "20", "0", "20")) +
+  scale_fill_manual(values = c("#D55E00", "#0072B2"), guide = "none") +
+  draw_text(x = 70, y = -39, "male", hjust = 0) +
+  draw_text(x = 70, y = 21, "female", hjust = 0) +
+  coord_flip() +
+  theme_minimal_grid(16) +
+  theme(axis.title.x = element_text(hjust = 0.61))
+```
+]
+
+
+???
+
+Figures redrawn from [Claus O. Wilke. Fundamentals of Data Visualization. O'Reilly, 2019.](https://clauswilke.com/dataviz)
+
+---
+
+## Alternatively: KDEs showing proportions of total
+
+.center[
+```{r titanic-age-props, echo = FALSE, fig.width = 10, fig.asp = 0.45, dev = "svg"}
+titanic %>%
+  mutate(sex = factor(sex, levels = c("male", "female"))) %>%
+  ggplot(aes(x = age, y = after_stat(count))) +
+  geom_density(
+    data = select(titanic, -sex), aes(fill = "all passengers"),
+    color = "transparent"
+  ) + 
+  geom_density(aes(fill = sex), bw = 2, color = "transparent") +
+  scale_x_continuous(limits = c(0, 75), name = "passenger age (years)", expand = c(0, 0)) +
+  scale_y_continuous(limits = c(0, 26), name = "scaled density", expand = c(0, 0)) +
+  scale_fill_manual(
+    values = c("#b3b3b3a0", "#0072B2", "#D55E00"), 
+    breaks = c("all passengers", "male", "female"),
+    labels = c("all passengers  ", "males  ", "females"),
+    name = NULL,
+    guide = guide_legend(direction = "horizontal")
+  ) +
+  coord_cartesian(clip = "off") +
+  facet_wrap(vars(sex), labeller = labeller(sex = function(sex) paste(sex, "passengers"))) +
+  theme_minimal_hgrid(16) +
+  theme(
+    axis.line.x = element_blank(),
+    strip.text = element_text(size = 14, margin = margin(0, 0, 0.2, 0, "cm")),
+    legend.position = "bottom",
+    legend.justification = "right",
+    legend.margin = margin(4.5, 0, 1.5, 0, "pt"),
+    legend.spacing.x = grid::unit(4.5, "pt"),
+    legend.spacing.y = grid::unit(0, "pt"),
+    legend.box.spacing = grid::unit(0, "cm")
+  )
+```
+]
+
+???
+
+Figures redrawn from [Claus O. Wilke. Fundamentals of Data Visualization. O'Reilly, 2019.](https://clauswilke.com/dataviz)
+
+[//]: # "segment ends here"
+
+
+---
+class: center middle
+
+## Histograms and density plots in **ggplot2**
+
+
+---
+
+## Making histograms with ggplot: `geom_histogram()`
+
+.small-font[
+```{r titanic-hist-ggplot-demo, eval = FALSE}
+ggplot(titanic, aes(age)) +
+  geom_histogram()
+```
+]
+
+--
+
+.center.small-font[
+```{r titanic-hist-ggplot-demo-out, ref.label = "titanic-hist-ggplot-demo", echo = FALSE, fig.width = 5.5, fig.asp = 0.618, dev = "svg"}
+```
+]
+
+---
+
+## Setting the bin width
+
+.small-font[
+```{r titanic-hist-ggplot-demo2, eval = FALSE}
+ggplot(titanic, aes(age)) +
+  geom_histogram(binwidth = 5)
+```
+]
+
+
+.center[
+```{r titanic-hist-ggplot-demo2-out, ref.label = "titanic-hist-ggplot-demo2", echo = FALSE, fig.width = 5.5, fig.asp = 0.618, dev = "svg"}
+```
+]
+
+--
+
+Do you like the bin placement?
+
+---
+
+## Always set the center as well
+
+.small-font[
+```{r titanic-hist-ggplot-demo3, eval = FALSE}
+ggplot(titanic, aes(age)) +
+  geom_histogram(
+    binwidth = 5,  # width of the bins
+    center = 2.5   # center of the bin containing that value
+  )
+```
+]
+
+
+.center[
+```{r titanic-hist-ggplot-demo3-out, ref.label = "titanic-hist-ggplot-demo3", echo = FALSE, fig.width = 5.5, fig.asp = 0.618, dev = "svg"}
+```
+]
+
+--
+
+Setting center 2.5 makes the bars start 0-5, 5-10, etc. instead of 2.5-7.5, etc. You could instead use the argument  `boundary=5` to accomplish the same behavior. 
+---
+
+## Making density plots with ggplot: `geom_density()`
+
+.small-font[
+```{r titanic-dens-ggplot-demo, eval = FALSE}
+ggplot(titanic, aes(age)) +
+  geom_density(fill = "skyblue")
+```
+]
+
+--
+
+.center[
+```{r titanic-dens-ggplot-demo-out, ref.label = "titanic-dens-ggplot-demo", echo = FALSE, fig.width = 5.5, fig.asp = 0.618, dev = "svg"}
+```
+]
+
+---
+
+## Making density plots with ggplot: `geom_density()`
+
+.small-font[
+```{r titanic-dens-ggplot-demo2, eval = FALSE}
+ggplot(titanic, aes(age)) +
+  geom_density() # without fill
+```
+]
+
+.center[
+```{r titanic-dens-ggplot-demo2-out, ref.label = "titanic-dens-ggplot-demo2", echo = FALSE, fig.width = 5.5, fig.asp = 0.618, dev = "svg"}
+```
+]
+
+---
+
+
+## Modifying bandwidth (`bw`) and kernel parameters
+
+.tiny-font[
+```{r titanic-dens-ggplot-demo3, eval = FALSE}
+ggplot(titanic, aes(age)) +
+  geom_density(
+    fill = "skyblue",
+    bw = 0.5,               # a small bandwidth
+    kernel = "gaussian"     # Gaussian kernel (the default)
+  )
+
+```
+]
+
+.center[
+```{r titanic-dens-ggplot-demo3-out, ref.label = "titanic-dens-ggplot-demo3", echo = FALSE, fig.width = 5.5, fig.asp = 0.618, dev = "svg"}
+```
+]
+
+---
+
+## Modifying bandwidth (`bw`) and kernel parameters
+
+.tiny-font[
+```{r titanic-dens-ggplot-demo4, eval = FALSE}
+ggplot(titanic, aes(age)) +
+  geom_density(
+    fill = "skyblue",
+    bw = 2,                 # a moderate bandwidth
+    kernel = "rectangular"  # rectangular kernel
+  )
+
+```
+]
+
+.center[
+```{r titanic-dens-ggplot-demo4-out, ref.label = "titanic-dens-ggplot-demo4", echo = FALSE, fig.width = 5.5, fig.asp = 0.618, dev = "svg"}
+```
+]
+
+[//]: # "segment ends here"
+
+
+---
+class: center middle
+
+## Setting stats explicitly in **ggplot2**
+
+---
+
+## Statistical transformations (stats) can be set explicitly
+
+.tiny-font[
+```{r titanic-stat-demo1, eval = FALSE}
+ggplot(titanic, aes(age)) +
+  geom_density(
+    stat = "density",    # the default for geom_density()
+    fill = "skyblue"
+  )
+```
+]
+
+.center[
+```{r titanic-stat-demo1-out, ref.label = "titanic-stat-demo1", echo = FALSE, fig.width = 5.5, fig.asp = 0.618, dev = "svg"}
+```
+]
+
+
+---
+
+## Statistical transformations (stats) can be set explicitly
+
+.tiny-font[
+```{r titanic-stat-demo2, eval = FALSE}
+ggplot(titanic, aes(age)) +
+  geom_area(  # geom_area() does not normally use stat = "density"
+    stat = "density",
+    fill = "skyblue"
+  )
+```
+]
+
+.center[
+```{r titanic-stat-demo2-out, ref.label = "titanic-stat-demo2", echo = FALSE, fig.width = 5.5, fig.asp = 0.618, dev = "svg"}
+```
+]
+
+---
+
+## Statistical transformations (stats) can be set explicitly
+
+.tiny-font[
+```{r titanic-stat-demo3, eval = FALSE}
+ggplot(titanic, aes(age)) +
+  geom_line(  # neither does geom_line()
+    stat = "density"
+  )
+```
+]
+
+.center[
+```{r titanic-stat-demo3-out, ref.label = "titanic-stat-demo3", echo = FALSE, fig.width = 5.5, fig.asp = 0.618, dev = "svg"}
+```
+]
+
+---
+
+## Statistical transformations (stats) can be set explicitly
+
+.tiny-font[
+```{r titanic-stat-demo4, eval = FALSE}
+ggplot(titanic, aes(age)) +
+  # we can use multiple geoms on top of each other
+  geom_area(stat = "density", fill = "skyblue") +
+  geom_line(stat = "density")
+```
+]
+
+.center[
+```{r titanic-stat-demo4-out, ref.label = "titanic-stat-demo4", echo = FALSE, fig.width = 5.5, fig.asp = 0.618, dev = "svg"}
+```
+]
+
+---
+
+## Parameters are handed through to the stat
+
+.pull-left.tiny-font[
+```{r titanic-stat-demo5, eval = FALSE}
+ggplot(titanic, aes(age)) +
+  geom_line(stat = "density", bw = 3)
+```
+
+.center[
+```{r titanic-stat-demo5-out, ref.label = "titanic-stat-demo5", echo = FALSE, fig.width = 5.5, fig.asp = 0.618, dev = "svg"}
+```
+]]
+
+.pull-right.tiny-font[
+```{r titanic-stat-demo6, eval = FALSE}
+ggplot(titanic, aes(age)) +
+  geom_line(stat = "density", bw = 0.3)
+```
+
+.center[
+```{r titanic-stat-demo6-out, ref.label = "titanic-stat-demo6", echo = FALSE, fig.width = 5.5, fig.asp = 0.618, dev = "svg"}
+```
+]]
+
+--
+
+Here, `bw` is a parameter of `stat_density()`, not of `geom_line()`.
+
+---
+
+## Density estimates visualize distributions
+
+.pull-left.small-font[
+Mean temperatures in Lincoln, NE, in January 2016:
+
+.center[
+```{r temps_table, echo = FALSE}
+lincoln_temps %>%
+  filter(month == "Jan") %>%
+  select(date, `mean temp` = mean_temp) %>%
+  knitr::kable()
+```
+]]
+
+--
+
+.pull-right[
+```{r temps_densities_january, echo = FALSE, fig.width = 5.5, fig.asp = 0.618, dev = "svg"}
+lincoln_temps %>%
+  filter(month == "Jan") %>%
+  ggplot(aes(mean_temp)) +
+  geom_density(fill = "#56B4E9", alpha = 0.7) +
+  scale_x_continuous(
+    name = "mean temperature (°F)",
+    expand = c(0, 0)
+  ) +
+  scale_y_continuous(expand = expansion(mult = c(0, 0.06))) +
+  ggtitle("Temperature distribution") +
+  theme_minimal_grid(18) +
+  theme(
+    plot.title.position = "plot",
+    plot.title = element_text(face = "plain")
+  )
+```
+]
+
+---
+
+
+## Density estimates visualize distributions
+
+.pull-left.small-font[
+Mean temperatures in Lincoln, NE, in January 2016:
+
+.center[
+```{r temps_table2, ref.label = "temps_table", echo = FALSE}
+```
+]]
+
+.pull-right[
+```{r temps_densities_january2, ref.label = "temps_densities_january", echo = FALSE, fig.width = 5.5, fig.asp = 0.618, dev = "svg"}
+```
+
+How can we compare distributions across months?
+]
+
+
+---
+
+## A bad idea: Many overlapping density plots
+
+.center[
+```{r temps_densities_overlapping, echo = FALSE, fig.width = 8, fig.asp = 0.618, dev = "svg"}
+p <- lincoln_temps %>%
+  mutate(
+    month_long = fct_rev(month_long)
+  ) %>%
+  ggplot(aes(mean_temp, fill = month)) +
+  geom_density(alpha = 0.5) +
+  scale_x_continuous(
+    name = "mean temperature (°F)",
+    expand = c(0, 0)
+  ) +
+  scale_y_continuous(expand = expansion(mult = c(0, 0.06))) +
+  scale_fill_viridis_d(option = "D") +
+  labs(subtitle = "") + # empty subtitle for some vertical space
+  theme_minimal_grid(16)
+
+stamp_bad(p)
+```
+]
+
+---
+
+## Another bad idea: Stacked density plots
+
+.center[
+```{r temps_densities_stacked, echo = FALSE, fig.width = 8, fig.asp = 0.618, dev = "svg"}
+p <- lincoln_temps %>%
+  mutate(
+    month_long = fct_rev(month_long)
+  ) %>%
+  ggplot(aes(mean_temp, fill = month)) +
+  geom_density(alpha = 0.7, position = "stack") +
+  scale_x_continuous(
+    name = "mean temperature (°F)",
+    expand = c(0, 0)
+  ) +
+  scale_y_continuous(expand = expansion(mult = c(0, 0.06))) +
+  scale_fill_viridis_d(option = "D") +
+  labs(subtitle = "") + # empty subtitle for some vertical space
+  theme_minimal_grid(16)
+
+stamp_bad(p)
+```
+]
+
+---
+
+## Somewhat better: Small multiples
+
+.center[
+```{r temps_densities, echo = FALSE, fig.width = 8, fig.asp = 0.618, dev = "svg"}
+lincoln_temps %>%
+  mutate(
+    month_long = fct_rev(month_long)
+  ) %>%
+  ggplot(aes(mean_temp)) +
+  geom_density(fill = "#56B4E9") +
+  scale_x_continuous(
+    name = "mean temperature (°F)",
+    expand = c(0, 0)
+  ) +
+  scale_y_continuous(expand = expansion(mult = c(0, 0.06))) +
+  facet_wrap(vars(month_long)) +
+  theme_minimal_grid(16, color = "gray65") +
+  theme(
+    panel.background = element_rect(fill = "gray95")
+  )
+```
+]
+
+---
+
+## Instead: Show values along y, conditions along x
+   
+.center[
+```{r temps_boxplots, echo = FALSE, fig.width = 6, fig.asp = 0.618, dev = "svg"}
+ggplot(lincoln_temps, aes(x = month, y = mean_temp)) +
+  geom_boxplot(fill = "gray90") + 
+  xlab("month") + 
+  ylab("mean temperature (°F)") +
+  theme_half_open()
+```
+]
+
+???
+
+Figure redrawn from [Claus O. Wilke. Fundamentals of Data Visualization. O'Reilly, 2019.](https://clauswilke.com/dataviz)
+
+--
+
+A boxplot is a crude way of visualizing a distribution.
+
+---
+
+## How to read a boxplot
+
+.center[
+```{r boxplot-schematic, echo = FALSE, fig.width = 8, fig.asp = 0.618, dev = "svg"}
+set.seed(3423)
+
+y <- c(rnorm(100), 3.4)
+s <- boxplot.stats(y)
+df <- tibble(
+  y = c(s$stats, max(y)),
+  x = c(1.03, 1.405, 1.405, 1.405, 1.03, 1.04),
+  label = c("minimum", "first quartile", "median", "third quartile", "maximum within upper fence", "outlier")
+)
+
+p_points <- ggplot(tibble(y), aes(x = 0, y = y)) + 
+  geom_point(position = position_jitter(width = .4, height = 0, seed = 320)) +
+  annotate("text", label = "data", x = 0, y = 4, hjust = 0.5, vjust = 1, size = 20/.pt) +
+  scale_x_continuous(limits = c(-1.8, .4), expand = c(0, 0)) +
+  scale_y_continuous(limits = c(-2.55, 4), expand = c(0, 0)) +
+  coord_cartesian(clip = "off") +
+  theme_nothing()
+
+p_boxplot <- ggplot(tibble(y), aes(x = 1, y = y)) + 
+  geom_boxplot(fill = "gray90", outlier.size = 2) +
+  annotate("text", label = "boxplot", x = 1, y = 4, hjust = 0.5, vjust = 1, size = 20/.pt) +
+  geom_text(
+    data = df, aes(x, y, label = label), hjust = 0,
+    size = 16/.pt
+  ) +
+  scale_x_continuous(limits = c(0, 3.5), expand = c(0, 0)) +
+  scale_y_continuous(limits = c(-2.55, 4), expand = c(0, 0)) +
+  coord_cartesian(clip = "off") +
+  theme_nothing()
+
+plot_grid(p_points, p_boxplot, rel_widths = c(.65, 1), nrow = 1)
+```
+]
+
+
+???
+
+Figure redrawn from [Claus O. Wilke. Fundamentals of Data Visualization. O'Reilly, 2019.](https://clauswilke.com/dataviz)
+
+---
+
+## If you like density plots, consider violins
+   
+.center[
+```{r temps_violins, echo = FALSE, fig.width = 6, fig.asp = 0.618, dev = "svg"}
+ggplot(lincoln_temps, aes(x = month, y = mean_temp)) +
+  geom_violin(fill = "gray90") + 
+  xlab("month") + 
+  ylab("mean temperature (°F)") +
+  theme_half_open()
+```
+]
+
+???
+
+Figure redrawn from [Claus O. Wilke. Fundamentals of Data Visualization. O'Reilly, 2019.](https://clauswilke.com/dataviz)
+
+--
+
+A violin plot is a density plot rotated 90 degrees and then mirrored.
+
+---
+
+## How to read a violin plot
+
+.center[
+```{r violin-schematic, echo = FALSE, fig.width = 8, fig.asp = 0.618, dev = "svg"}
+set.seed(3423)
+
+y <- c(rnorm(100), 3.4)
+d <- density(y)
+df <- tibble(
+  y = c(min(y), d$x[which(d$y == max(d$y))], max(y)),
+  x = c(1.1, 1.5, 1.08),
+  label = c("minimum data value", "maximum point density", "maximum data value")
+)
+
+p_points <- ggplot(tibble(y), aes(x = 0, y = y)) + 
+  geom_point(position = position_jitter(width = .4, height = 0, seed = 320)) +
+  annotate("text", label = "data", x = 0, y = 4, hjust = 0.5, vjust = 1, size = 20/.pt) +
+  scale_x_continuous(limits = c(-1.8, .4), expand = c(0, 0)) +
+  scale_y_continuous(limits = c(-2.55, 4), expand = c(0, 0)) +
+  coord_cartesian(clip = "off") +
+  theme_nothing()
+
+p_violin <- ggplot(tibble(y), aes(x = 1, y = y)) + 
+  geom_violin(fill = "gray90") +
+  annotate("text", label = "violin plot", x = 1, y = 4, hjust = 0.5, vjust = 1, size = 20/.pt) +
+  geom_text(
+    data = df, aes(x, y, label = label), hjust = 0,
+    size = 16/.pt
+  ) +
+  scale_x_continuous(limits = c(0, 3.5), expand = c(0, 0)) +
+  scale_y_continuous(limits = c(-2.55, 4), expand = c(0, 0)) +
+  coord_cartesian(clip = "off") +
+  theme_nothing()
+
+plot_grid(p_points, p_violin, rel_widths = c(.65, 1), nrow = 1)
+```
+]
+
+???
+
+Figure redrawn from [Claus O. Wilke. Fundamentals of Data Visualization. O'Reilly, 2019.](https://clauswilke.com/dataviz)
+
+---
+
+## For small datasets, you can also use a strip chart
+
+Advantage: Can see raw data points instead of abstract representation.
+
+.center[
+```{r temps_stripchart, echo = FALSE, fig.width = 6, fig.asp = 0.618, dev = "svg"}
+ggplot(lincoln_temps, aes(x = month, y = mean_temp)) +
+  geom_point(
+    position = position_jitter(width = .15, height = 0, seed = 320),
+    size = 0.75
+  ) +
+  xlab("month") + 
+  ylab("mean temperature (°F)") +
+  theme_half_open()
+```
+]
+
+???
+
+Figure redrawn from [Claus O. Wilke. Fundamentals of Data Visualization. O'Reilly, 2019.](https://clauswilke.com/dataviz)
+
+--
+
+Horizontal jittering may be necessary to avoid overlapping points.
+
+---
+
+## For small datasets, you can also use a strip chart
+
+Advantage: Can see raw data points instead of abstract representation.
+
+.center[
+```{r temps_stripchart2, echo = FALSE, fig.width = 6, fig.asp = 0.618, dev = "svg"}
+ggplot(lincoln_temps, aes(x = month, y = mean_temp)) +
+  geom_point(size = 0.75) +
+  xlab("month") + 
+  ylab("mean temperature (°F)") +
+  theme_half_open()
+```
+]
+
+Horizontal jittering may be necessary to avoid overlapping points.
+
+???
+
+Figure redrawn from [Claus O. Wilke. Fundamentals of Data Visualization. O'Reilly, 2019.](https://clauswilke.com/dataviz)
+
+---
+
+## For small datasets, you can also use a strip chart
+
+Advantage: Can see raw data points instead of abstract representation.
+
+.center[
+```{r temps_stripchart3, ref.label = "temps_stripchart", echo = FALSE, fig.width = 6, fig.asp = 0.618, dev = "svg"}
+```
+]
+
+Horizontal jittering may be necessary to avoid overlapping points.
+
+
+???
+
+Figure redrawn from [Claus O. Wilke. Fundamentals of Data Visualization. O'Reilly, 2019.](https://clauswilke.com/dataviz)
+
+---
+
+## We can also jitter points into violins
+   
+.center[
+```{r temps_sina, echo = FALSE, fig.width = 6, fig.asp = 0.618, dev = "svg"}
+ggplot(lincoln_temps, aes(x = month, y = mean_temp)) +
+  geom_violin(fill = "gray90", color = NA) + 
+  geom_sina(size = 0.75) + 
+  xlab("month") + 
+  ylab("mean temperature (°F)") +
+  theme_half_open()
+```
+]
+
+???
+
+Figure redrawn from [Claus O. Wilke. Fundamentals of Data Visualization. O'Reilly, 2019.](https://clauswilke.com/dataviz)
+
+--
+
+Such plots are called sina plots, to honor [Sina Hadi Sohi.](https://clauswilke.com/dataviz/boxplots-violins.html#fig:lincoln-temp-sina)
+
+
+---
+
+## Another option is a scatter-density plot
+
+Advantage: Best of both worlds for violin and jitter plot, see the raw data but also see the shape of the density
+
+.center[
+```{r temps_beeswarm, echo = FALSE, fig.width = 6, fig.asp = 0.618, dev = "svg"}
+ggplot(lincoln_temps, aes(x = month, y = mean_temp)) +
+  geom_quasirandom(
+    size=1.5,
+    color="skyblue"
+  ) +
+  xlab("month") + 
+  ylab("mean temperature (°F)") +
+  theme_half_open()
+```
+]
+
+???
+
+Figure redrawn from [Claus O. Wilke. Fundamentals of Data Visualization. O'Reilly, 2019.](https://clauswilke.com/dataviz)
+
+
+---
+
+## But maybe there's hope for overlapping density plots?
+
+.center[
+```{r temps_densities_overlapping2, echo = FALSE, fig.width = 6, fig.asp = 0.618, dev = "svg"}
+lincoln_temps %>%
+  mutate(
+    month_long = fct_rev(month_long)
+  ) %>%
+  ggplot(aes(mean_temp, fill = month)) +
+  geom_density(alpha = 0.5) +
+  scale_x_continuous(
+    name = "mean temperature (°F)",
+    expand = c(0, 0),
+    breaks = c(0, 25, 50, 75)
+  ) +
+  scale_y_continuous(expand = expansion(mult = c(0, 0.06))) +
+  scale_fill_viridis_d(option = "D") +
+  theme_minimal_grid(16)
+```
+]
+
+
+???
+
+Figure redrawn from [Claus O. Wilke. Fundamentals of Data Visualization. O'Reilly, 2019.](https://clauswilke.com/dataviz)
+
+--
+
+How about we stagger the densities vertically?
+
+---
+
+## Vertically staggered density plots are called ridgelines
+
+.center[
+```{r lincoln-ridgeline-polished, echo = FALSE, fig.width = 6, fig.asp = 0.618, dev = "svg"}
+
+ggplot(lincoln_temps, aes(x = mean_temp, y = month_long)) +
+  geom_density_ridges(
+    scale = 3,
+    rel_min_height = 0.01,
+    bandwidth = 3.4,
+    fill = lighten("#56B4E9", .3),
+    color = "white"
+  ) +
+  scale_x_continuous(
+    name = "mean temperature (°F)",
+    expand = c(0, 0)#, breaks = c(0, 25, 50, 75)
+  ) +
+  scale_y_discrete(name = NULL, expand = expansion(add = c(0.2, 2.6))) +
+  theme_minimal_grid(16) +
+  theme(
+    axis.text.y = element_text(vjust = 0)
+  )
+```
+]
+
+
+???
+
+Figure redrawn from [Claus O. Wilke. Fundamentals of Data Visualization. O'Reilly, 2019.](https://clauswilke.com/dataviz)
+
+--
+
+Notice the single fill color. More colors would be distracting. 
+
+---
+class: center middle
+
+## Advice - always show the finest granularity of data that is practical. 
+
+If you don't have too many points, show them! It makes it much easier to interpret the data. Especially when you are exploring new datasets.
+
+Favor showing distributions over just a mean with error bars.
+
+---
+
+---
+class: center middle
+
+## Making boxplots, violins, etc. in **ggplot2**
+
+---
+
+## Making boxplots, violins, etc. in **ggplot2**
+
+.small-font.center[
+
+Plot type    | Geom                    | Notes
+:----------- | :-----------------      | :-------------------------
+boxplot      | `geom_boxplot()`        |
+violin plot  | `geom_violin()`         |
+strip chart  | `geom_point()`          | Jittering requires `position_jitter()`
+sina plot    | `geom_sina()`           | From package **ggforce**
+scatter-density plot    | `geom_quasirandom()`           | From package **ggbeeswarm**
+ridgeline    | `geom_density_ridges()` | From package **ggridges**
+
+]
+
+---
+
+## Examples: Boxplot
+
+.tiny-font[
+```{r temps-examples-boxplot, eval = FALSE}
+ggplot(lincoln_temps, aes(x = month, y = mean_temp)) +
+  geom_boxplot(fill = "skyblue") 
+```
+]
+
+.center[
+```{r temps-examples-boxplot-out, ref.label = "temps-examples-boxplot", echo = FALSE, fig.width = 5.5, fig.asp = 0.618, dev = "svg"}
+```
+]
+
+---
+
+## Examples: Violins
+
+.tiny-font[
+```{r temps-examples-violins, eval = FALSE}
+ggplot(lincoln_temps, aes(x = month, y = mean_temp)) +
+  geom_violin(fill = "skyblue") 
+```
+]
+
+.center[
+```{r temps-examples-violin-out, ref.label = "temps-examples-violins", echo = FALSE, fig.width = 5.5, fig.asp = 0.618, dev = "svg"}
+```
+]
+
+
+---
+
+## Examples: Strip chart (no jitter)
+
+.tiny-font[
+```{r temps-examples-stripchart, eval = FALSE}
+ggplot(lincoln_temps, aes(x = month, y = mean_temp)) +
+  geom_point(size = 0.75)  # reduce point size to minimize overplotting 
+```
+]
+
+.center[
+```{r temps-examples-stripchart-out, ref.label = "temps-examples-stripchart", echo = FALSE, fig.width = 5.5, fig.asp = 0.618, dev = "svg"}
+```
+]
+
+
+---
+
+## Examples: Strip chart (w/ jitter)
+
+.tiny-font[
+```{r temps-examples-stripchart-jitter, eval = FALSE}
+ggplot(lincoln_temps, aes(x = month, y = mean_temp)) +
+  geom_point(size = 0.75,  # reduce point size to minimize overplotting 
+    position = position_jitter(
+      width = 0.15,  # amount of jitter in horizontal direction
+      height = 0     # amount of jitter in vertical direction (0 = none)
+    )
+  )
+```
+]
+
+.center[
+```{r temps-examples-stripchart-jitter-out, ref.label = "temps-examples-stripchart-jitter", echo = FALSE, fig.width = 5.5, fig.asp = 0.618, dev = "svg"}
+```
+]
+
+
+---
+
+## Examples: Sina plot
+
+.tiny-font[
+```{r temps-examples-sina, eval = FALSE}
+library(ggforce) # for geom_sina()
+
+ggplot(lincoln_temps, aes(x = month, y = mean_temp)) +
+  geom_violin(fill = "skyblue", color = NA) + # violins in background
+  geom_sina(size = 0.75) # sina jittered points in foreground
+```
+]
+
+.center[
+```{r temps-examples-sina-out, ref.label = "temps-examples-sina", echo = FALSE, fig.width = 5.5, fig.asp = 0.618, dev = "svg"}
+```
+]
+
+
+---
+
+
+## Examples: scatter-density plot
+
+.tiny-font[
+```{r temps-examples-beeswarm, eval = FALSE}
+library(ggbeeswarm) # for geom_quasirandom()
+
+ggplot(lincoln_temps, aes(x = month, y = mean_temp)) +
+  geom_quasirandom(color = "skyblue") 
+```
+]
+
+.center[
+```{r temps-examples-beeswarm-out, ref.label = "temps-examples-beeswarm", echo = FALSE, fig.width = 5.5, fig.asp = 0.618, dev = "svg"}
+```
+]
+
+
+---
+
+## Examples: scatter-density plot
+
+.tiny-font[
+```{r temps-examples-beeswarm-alpha, eval = FALSE}
+library(ggbeeswarm) # for geom_quasirandom()
+
+ggplot(lincoln_temps, aes(x = month, y = mean_temp)) +
+  geom_quasirandom(color = "skyblue", width=0.2, alpha=0.5) # make the spread skinnier and
+                                                            # set transparency (alpha) to half.
+```
+]
+
+.center[
+```{r temps-examples-beeswarm-alpha-out, ref.label = "temps-examples-beeswarm-alpha", echo = FALSE, fig.width = 5.5, fig.asp = 0.618, dev = "svg"}
+```
+]
+
+
+---
+
+
+## Examples: Ridgeline plot
+
+.tiny-font[
+```{r temps-examples-ridgeline, eval = FALSE}
+library(ggridges) # for geom_density_ridges
+
+ggplot(lincoln_temps, aes(x = mean_temp, y = month_long)) +
+  geom_density_ridges()
+```
+]
+
+.center[
+```{r temps-examples-ridgeline-out, ref.label = "temps-examples-ridgeline", echo = FALSE, message = FALSE, fig.width = 5.5, fig.asp = 0.618, dev = "svg"}
+```
+]
+
+[//]: # "segment ends here"
+
+---
+## Exercise 3
+
+Time to try it out yourself!
+
+Got to [https://elsherbini.github.io/AMNH_R_Workshop_2023/modules/data-wrangling-module/](https://elsherbini.github.io/AMNH_R_Workshop_2023/modules/data-wrangling-module/) and complete the visualizing distributions exercise.
+
+
+
+
